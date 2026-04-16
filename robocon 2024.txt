@@ -1,0 +1,180 @@
+/* USER CODE BEGIN Header */
+/**
+  * @file           : main.c
+  * @brief          : Main program body
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include <math.h> // Để sử dụng M_PI
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define PWM1 TIM1->CCR4
+#define DIR1_SET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_4, GPIO_PIN_SET)
+#define DIR1_RESET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_4, GPIO_PIN_RESET)
+
+#define PWM2 TIM1->CCR3
+#define DIR2_SET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_3, GPIO_PIN_SET)
+#define DIR2_RESET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_3, GPIO_PIN_RESET)
+
+#define PWM3 TIM1->CCR2
+#define DIR3_SET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_SET)
+#define DIR3_RESET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET)
+
+#define PWM4 TIM1->CCR1
+#define DIR4_SET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET)
+#define DIR4_RESET HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET)
+
+#define ENCODER_PPR 1000 // Số xung mỗi vòng
+#define WHEEL_RADIUS 0.05 // Bán kính bánh xe (m)
+#define WHEEL_DISTANCE 0.2 // Khoảng cách tâm xe tới bánh (m)
+#define SAMPLE_TIME 0.01 // Thời gian lấy mẫu (s)
+
+#define MAX_PWM 255 // Giá trị tối đa cho PWM
+#define MIN_PWM 0   // Giá trị tối thiểu cho PWM
+/* USER CODE END PD */
+
+/* USER CODE BEGIN PV */
+// Biến PID
+float Kp = 1.0, Ki = 0.5, Kd = 0.1;
+
+float prev_error1 = 0, integral1 = 0;
+float prev_error2 = 0, integral2 = 0;
+float prev_error3 = 0, integral3 = 0;
+float prev_error4 = 0, integral4 = 0;
+
+// Setpoint tốc độ (m/s)
+float setpoint1 = 0, setpoint2 = 0, setpoint3 = 0, setpoint4 = 0;
+
+// Tốc độ thực tế (m/s)
+float actual_speed1 = 0, actual_speed2 = 0, actual_speed3 = 0, actual_speed4 = 0;
+
+/* USER CODE END PV */
+
+/* USER CODE BEGIN PFP */
+float calculate_speed(uint32_t encoder_count);
+float PID_Controller(float setpoint, float actual, float *prev_error, float *integral, float Kp, float Ki, float Kd);
+void set_motor_speed(int motor, float pwm_output);
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+float calculate_speed(uint32_t encoder_count) {
+    float speed = (encoder_count * 2 * M_PI * WHEEL_RADIUS) / (ENCODER_PPR * SAMPLE_TIME);
+    return speed; // m/s
+}
+
+float PID_Controller(float setpoint, float actual, float *prev_error, float *integral, float Kp, float Ki, float Kd) {
+    float error = setpoint - actual;
+    *integral += error * SAMPLE_TIME;
+    float derivative = (error - *prev_error) / SAMPLE_TIME;
+    *prev_error = error;
+
+    float output = (Kp * error) + (Ki * (*integral)) + (Kd * derivative);
+    return output;
+}
+
+void set_motor_speed(int motor, float pwm_output) {
+    if (pwm_output > 0) {
+        switch (motor) {
+        case 1:
+            DIR1_SET;
+            PWM1 = (uint16_t)pwm_output;
+            break;
+        case 2:
+            DIR2_SET;
+            PWM2 = (uint16_t)pwm_output;
+            break;
+        case 3:
+            DIR3_SET;
+            PWM3 = (uint16_t)pwm_output;
+            break;
+        case 4:
+            DIR4_SET;
+            PWM4 = (uint16_t)pwm_output;
+            break;
+        }
+    } else {
+        switch (motor) {
+        case 1:
+            DIR1_RESET;
+            PWM1 = (uint16_t)(-pwm_output);
+            break;
+        case 2:
+            DIR2_RESET;
+            PWM2 = (uint16_t)(-pwm_output);
+            break;
+        case 3:
+            DIR3_RESET;
+            PWM3 = (uint16_t)(-pwm_output);
+            break;
+        case 4:
+            DIR4_RESET;
+            PWM4 = (uint16_t)(-pwm_output);
+            break;
+        }
+    }
+}
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+    /* USER CODE BEGIN 1 */
+
+    /* USER CODE END 1 */
+
+    /* MCU Configuration--------------------------------------------------------*/
+    HAL_Init();
+
+    SystemClock_Config();
+
+    MX_GPIO_Init();
+    MX_TIM1_Init();
+
+    /* USER CODE BEGIN 2 */
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
+    /* USER CODE END 2 */
+
+    /* Infinite loop */
+    while (1) {
+        /* USER CODE BEGIN WHILE */
+        // Đọc tốc độ thực tế từ encoder (giả lập giá trị cho ví dụ)
+        actual_speed1 = calculate_speed(100);
+        actual_speed2 = calculate_speed(120);
+        actual_speed3 = calculate_speed(110);
+        actual_speed4 = calculate_speed(115);
+
+        // Tính toán PID
+        float pwm1 = PID_Controller(setpoint1, actual_speed1, &prev_error1, &integral1, Kp, Ki, Kd);
+        float pwm2 = PID_Controller(setpoint2, actual_speed2, &prev_error2, &integral2, Kp, Ki, Kd);
+        float pwm3 = PID_Controller(setpoint3, actual_speed3, &prev_error3, &integral3, Kp, Ki, Kd);
+        float pwm4 = PID_Controller(setpoint4, actual_speed4, &prev_error4, &integral4, Kp, Ki, Kd);
+
+        // Giới hạn PWM
+        pwm1 = fminf(fmaxf(pwm1, MIN_PWM), MAX_PWM);
+        pwm2 = fminf(fmaxf(pwm2, MIN_PWM), MAX_PWM);
+        pwm3 = fminf(fmaxf(pwm3, MIN_PWM), MAX_PWM);
+        pwm4 = fminf(fmaxf(pwm4, MIN_PWM), MAX_PWM);
+
+        // Cập nhật tốc độ động cơ
+        set_motor_speed(1, pwm1);
+        set_motor_speed(2, pwm2);
+        set_motor_speed(3, pwm3);
+        set_motor_speed(4, pwm4);
+
+        HAL_Delay(SAMPLE_TIME * 1000);
+        /* USER CODE END WHILE */
+    }
+}
+/* USER CODE END */

@@ -1,0 +1,210 @@
+#include "stm32f1xx_hal.h"
+
+// ----- Define Pins and Macros -----
+#define MOTOR1_PWM_PIN GPIO_PIN_0 // PWM cho động cơ 1
+#define MOTOR2_PWM_PIN GPIO_PIN_1 // PWM cho động cơ 2
+#define MOTOR3_PWM_PIN GPIO_PIN_2 // PWM cho động cơ 3
+#define MOTOR4_PWM_PIN GPIO_PIN_3 // PWM cho động cơ 4
+
+#define MOTOR_PORT GPIOA           // Cổng kết nối động cơ
+
+#define PS2_CS_PIN GPIO_PIN_4      // Chân CS của PS2
+#define PS2_CLK_PIN GPIO_PIN_5     // Chân CLK của PS2
+#define PS2_DO_PIN GPIO_PIN_6      // Chân Data Out (MISO)
+#define PS2_DI_PIN GPIO_PIN_7      // Chân Data In (MOSI)
+
+#define BLUETOOTH_UART &huart1     // UART dùng cho Bluetooth
+
+// ----- Variables -----
+UART_HandleTypeDef huart1; // UART1 cho Bluetooth
+SPI_HandleTypeDef hspi1;   // SPI1 cho giao tiếp PS2
+TIM_HandleTypeDef htim1;   // Timer cho PWM
+
+// Dữ liệu từ PS2 và Bluetooth
+uint8_t ps2_data[6];       // Mảng dữ liệu nhận từ PS2
+char bluetooth_data[10];   // Dữ liệu nhận từ Bluetooth
+
+// Giá trị PID
+float pid_setpoint[4] = {0}; // Tốc độ mục tiêu của 4 động cơ
+float pid_error[4] = {0};    // Sai số PID
+float pid_integral[4] = {0}; // Tích phân của sai số
+float pid_output[4] = {0};   // Đầu ra PID
+
+float kp = 1.0, ki = 0.0, kd = 0.1; // Hệ số PID
+
+// ----- Function Prototypes -----
+void SystemClock_Config(void);
+void MX_GPIO_Init(void);
+void MX_USART1_UART_Init(void);
+void MX_SPI1_Init(void);
+void MX_TIM1_Init(void);
+
+void PS2_ReadData(void);
+void Bluetooth_ReadData(void);
+void PID_Control(void);
+void Motor_Control(void);
+
+// ----- Main Program -----
+int main(void) {
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_USART1_UART_Init();
+    MX_SPI1_Init();
+    MX_TIM1_Init();
+
+    // Khởi động các kênh PWM
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
+
+    while (1) {
+        // Đọc dữ liệu từ tay cầm PS2
+        PS2_ReadData();
+
+        // Đọc dữ liệu từ Bluetooth
+        Bluetooth_ReadData();
+
+        // Điều khiển PID
+        PID_Control();
+
+        // Xuất tín hiệu điều khiển ra động cơ
+        Motor_Control();
+
+        HAL_Delay(10); // Chu kỳ 10ms
+    }
+}
+
+// ----- PS2 Read Data -----
+void PS2_ReadData(void) {
+    uint8_t cmd[2] = {0x01, 0x42}; // Lệnh đọc từ PS2
+    HAL_GPIO_WritePin(GPIOA, PS2_CS_PIN, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, &cmd[0], 1, 100);
+    HAL_SPI_Transmit(&hspi1, &cmd[1], 1, 100);
+    HAL_SPI_Receive(&hspi1, ps2_data, 6, 100);
+    HAL_GPIO_WritePin(GPIOA, PS2_CS_PIN, GPIO_PIN_SET);
+
+    // Xử lý dữ liệu từ tay cầm PS2
+    pid_setpoint[0] = ps2_data[2]; // Tốc độ động cơ 1
+    pid_setpoint[1] = ps2_data[3]; // Tốc độ động cơ 2
+    pid_setpoint[2] = ps2_data[4]; // Tốc độ động cơ 3
+    pid_setpoint[3] = ps2_data[5]; // Tốc độ động cơ 4
+}
+
+// ----- Bluetooth Read Data -----
+void Bluetooth_ReadData(void) {
+    if (HAL_UART_Receive(&huart1, (uint8_t *)bluetooth_data, sizeof(bluetooth_data), 100) == HAL_OK) {
+        // Xử lý dữ liệu từ Bluetooth, giả sử Bluetooth gửi dữ liệu kiểu chuỗi
+        if (bluetooth_data[0] == 'F') {
+            pid_setpoint[0] = 100; // Ví dụ: Nhấn F -> Tăng tốc động cơ 1
+        }
+        if (bluetooth_data[1] == 'B') {
+            pid_setpoint[1] = 100; // Ví dụ: Nhấn B -> Tăng tốc động cơ 2
+        }
+        // Xử lý thêm các ký tự điều khiển khác nếu cần
+    }
+}
+
+// ----- PID Control -----
+void PID_Control(void) {
+    for (int i = 0; i < 4; i++) {
+        pid_error[i] = pid_setpoint[i] - pid_output[i];
+        pid_integral[i] += pid_error[i];
+        pid_output[i] = kp * pid_error[i] + ki * pid_integral[i] - kd * (pid_output[i] - pid_error[i]);
+    }
+}
+
+// ----- Motor Control -----
+void Motor_Control(void) {
+    // Giới hạn đầu ra PID
+    for (int i = 0; i < 4; i++) {
+        if (pid_output[i] > 1000) pid_output[i] = 1000;
+        if (pid_output[i] < 0) pid_output[i] = 0;
+    }
+
+    // Xuất tín hiệu PWM cho các động cơ
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, (uint32_t)pid_output[0]);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, (uint32_t)pid_output[1]);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, (uint32_t)pid_output[2]);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, (uint32_t)pid_output[3]);
+}
+
+// ----- GPIO Init -----
+void MX_GPIO_Init(void) {
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // Cấu hình chân GPIO cho động cơ
+    GPIO_InitStruct.Pin = MOTOR1_PWM_PIN | MOTOR2_PWM_PIN | MOTOR3_PWM_PIN | MOTOR4_PWM_PIN;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(MOTOR_PORT, &GPIO_InitStruct);
+
+    // Cấu hình chân CS cho PS2
+    GPIO_InitStruct.Pin = PS2_CS_PIN;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+// ----- UART Init (Bluetooth) -----
+void MX_USART1_UART_Init(void) {
+    huart1.Instance = USART1;
+    huart1.Init.BaudRate = 9600;
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits = UART_STOPBITS_1;
+    huart1.Init.Parity = UART_PARITY_NONE;
+    huart1.Init.Mode = UART_MODE_TX_RX;
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    HAL_UART_Init(&huart1);
+}
+
+// ----- SPI Init (PS2) -----
+void MX_SPI1_Init(void) {
+    hspi1.Instance = SPI1;
+    hspi1.Init.Mode = SPI_MODE_MASTER;
+    hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+    hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+    hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+    hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+    hspi1.Init.NSS = SPI_NSS_SOFT;
+    hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+    hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+    hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+    hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+    HAL_SPI_Init(&hspi1);
+}
+
+// ----- Timer Init (PWM) -----
+void MX_TIM1_Init(void) {
+    __HAL_RCC_TIM1_CLK_ENABLE();
+
+    TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+    TIM_MasterConfigTypeDef sMasterConfig = {0};
+    TIM_OC_InitTypeDef sConfigOC = {0};
+
+    htim1.Instance = TIM1;
+    htim1.Init.Prescaler = 72 - 1; // 1 MHz
+    htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim1.Init.Period = 1000 - 1; // 1 kHz
+    htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    HAL_TIM_PWM_Init(&htim1);
+
+    sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+    HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig);
+
+    sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+    sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+    sMasterConfig.MasterInputTrigger = TIM_TS_ITR0;
+    HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig);
+
+    // Cấu hình các kênh PWM
+    sConfigOC.OCMode = TIM_OCMODE_PWM1;
+    sConfigOC.Pulse = 500; // Duty cycle 50%
+    sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+    sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+    HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1);
+    HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2);
+    HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3);
+    HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4);
+}
